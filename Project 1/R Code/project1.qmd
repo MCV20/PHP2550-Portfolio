@@ -47,7 +47,8 @@ library(pROC)
 library(glmnet)
 
 #Load data
-df <- read.csv("Data/project1.csv",na.strings=c("","NA"))
+#df <- read.csv("Data/project1.csv",na.strings=c("","NA"))
+df <- read.csv("../Data/project1.csv",na.strings=c("","NA"))
 
 #Set colors
 cbp2 <- c( "#4E84C4", "#C3D7A4" ,"#52854C", "#F4EDCA","#293352")
