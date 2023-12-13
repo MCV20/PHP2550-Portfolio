@@ -8,4 +8,4 @@ Data used in this project provided by the Institution is confidential and propri
 R version 4.3.2 (2023-10-31 ucrt)
 
 # Guideline
-In this repository, you'll find a collection of all three projects organized. Specifically, within the "Project X" folder, you'll find results pertinent to each project. Each folder contains a ReadMe file  crafted to guide you through the contents and provide essential explanations.
+In this repository, you'll find a collection of all three projects organized. Specifically, within the `Project X` folder, you'll find results pertinent to  project `X`. Each folder contains a ReadMe file  crafted to guide you through the contents and provide essential explanations.
