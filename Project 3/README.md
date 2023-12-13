@@ -10,6 +10,6 @@ The precision in estimation processes indicates stability and consistency, refle
 
 ## Guideline
 
-In this folder you will find 3 different folders.The folder `Manuscript` contains the pdf report and the zip-file for the Latex text. The `R Code` folder contains the code for reproduction. You will find two files there. The file `project3.qmd` contains all necessary code for reproduction and the file `project3-fixed-res.RData` contains the saved workspace of the simulation results.
+In this folder you will find 3 different folders.The folder `Manuscript` contains the pdf report, the zip-file for the Latex text, and additionally, the poster for this project. The `R Code` folder contains the code for reproduction. You will find two files there. The file `project3.qmd` contains all necessary code for reproduction and the file `project3-fixed-res.RData` contains the saved workspace of the simulation results.
 
 
