@@ -1,2 +1,5 @@
-# PHP2550-Portfolio
-Portfolio including the three projects of PHP2550
+# PHP 2550 Project 1
+
+## Description 
+
+## Guideline
