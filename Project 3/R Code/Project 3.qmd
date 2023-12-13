@@ -1,0 +1,1328 @@
+---
+title: "Project 3"
+author: "Monica Colon Vargas"
+format: pdf
+editor: visual
+---
+
+```{r}
+library(riskCommunicator)
+library(tidyverse)
+library(tableone)
+library(naniar)
+library(dplyr)
+library(MASS)
+library(corrplot)
+library(GGally)
+library(ggpubr)
+library(nhanesA)
+library(ggcorrplot)
+library(kableExtra)
+library(gtsummary)
+```
+
+# Introduction
+
+# Data
+
+### Framingham
+
+```{r}
+data("framingham")
+framingham_df <- framingham %>% dplyr::select(c(CVD, TIMECVD, SEX, TOTCHOL, AGE,
+                                      SYSBP, DIABP, CURSMOKE, DIABETES, BPMEDS,
+                                      HDLC, BMI))
+framingham_df <- na.omit(framingham_df)
+
+# Get blood pressure based on whether or not on BPMEDS
+framingham_df$SYSBP_UT <- ifelse(framingham_df$BPMEDS == 0, 
+                                 framingham_df$SYSBP, 0)
+framingham_df$SYSBP_T <- ifelse(framingham_df$BPMEDS == 1, 
+                                framingham_df$SYSBP, 0)
+
+# Looking at risk within 15 years - remove censored data
+framingham_df <- framingham_df %>%
+  filter(!(CVD == 0 & TIMECVD <= 365*15)) %>%
+  dplyr::select(-c(TIMECVD))
+
+#Factor variables
+framingham_df <- framingham_df %>% 
+  mutate(SEX = as.factor(SEX),
+         CURSMOKE = as.factor(CURSMOKE),
+         DIABETES = as.factor(DIABETES),
+         BPMEDS = as.factor(BPMEDS)
+         )
+
+framingham_df %>% dplyr::select(-CVD,-SYSBP_UT,-SYSBP_T,-BMI,-DIABP) %>%
+  tbl_summary(digits = list(everything() ~ c(2)),
+                   statistic = list(all_continuous() ~ "{mean} ({sd})"),
+                   by = SEX) %>%
+  add_overall() %>% 
+  add_n() %>%
+  modify_header(label ~ "**Sex**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Sex**") %>%
+  bold_labels()
+
+
+# Filter to each sex
+framingham_df_men <- framingham_df %>% filter(SEX == 1)
+framingham_df_women <- framingham_df %>% filter(SEX == 2)
+
+# Fit models with log transforms for all continuous variables
+mod_men <- glm(as.factor(CVD)~log(HDLC)+log(TOTCHOL)+log(AGE)+log(SYSBP_UT+1)+
+                 log(SYSBP_T+1)+CURSMOKE+DIABETES,
+               data= framingham_df_men, family= "binomial")
+
+mod_women <- glm(as.factor(CVD)~log(HDLC)+log(TOTCHOL)+log(AGE)+log(SYSBP_UT+1)+
+                   log(SYSBP_T+1)+CURSMOKE+DIABETES, 
+               data= framingham_df_women, family= "binomial")
+```
+
+### Nhanes
+
+```{r}
+# The NHANES data here finds the same covariates among this national survey data
+
+
+# blood pressure, demographic, bmi, smoking, and hypertension info
+bpx_2017 <- nhanes("BPX_J") %>% 
+  dplyr::select(SEQN, BPXSY1 ) %>% 
+  rename(SYSBP = BPXSY1)
+demo_2017 <- nhanes("DEMO_J") %>% 
+  dplyr::select(SEQN, RIAGENDR, RIDAGEYR) %>% 
+  rename(SEX = RIAGENDR, AGE = RIDAGEYR)
+bmx_2017 <- nhanes("BMX_J") %>% 
+  dplyr::select(SEQN, BMXBMI) %>% 
+  rename(BMI = BMXBMI)
+smq_2017 <- nhanes("SMQ_J") %>%
+  mutate(CURSMOKE = case_when(SMQ040 %in% c(1,2) ~ 1,
+                              SMQ040 == 3 ~ 0, 
+                              SMQ020 == 2 ~ 0)) %>%
+  dplyr::select(SEQN, CURSMOKE)
+bpq_2017 <- nhanes("BPQ_J") %>% 
+  mutate(BPMEDS = case_when(
+    BPQ020 == 2 ~ 0,
+    BPQ040A == 2 ~ 0,
+    BPQ050A == 1 ~ 1,
+    TRUE ~ NA )) %>%
+  dplyr::select(SEQN, BPMEDS) 
+tchol_2017 <- nhanes("TCHOL_J") %>% 
+  dplyr::select(SEQN, LBXTC) %>% 
+  rename(TOTCHOL = LBXTC)
+hdl_2017 <- nhanes("HDL_J") %>% 
+  dplyr::select(SEQN, LBDHDD) %>% 
+  rename(HDLC = LBDHDD)
+diq_2017 <- nhanes("DIQ_J") %>% 
+  mutate(DIABETES = case_when(DIQ010 == 1 ~ 1, 
+                              DIQ010 %in% c(2,3) ~ 0, 
+                              TRUE ~ NA)) %>%
+  dplyr::select(SEQN, DIABETES) 
+
+# Join data from different tables
+df_2017 <- bpx_2017 %>%
+  full_join(demo_2017, by = "SEQN") %>%
+  full_join(bmx_2017, by = "SEQN") %>%
+  full_join(hdl_2017, by = "SEQN") %>%
+  full_join(smq_2017, by = "SEQN") %>%
+  full_join(bpq_2017, by = "SEQN") %>%
+  full_join(tchol_2017, by = "SEQN") %>%
+  full_join(diq_2017, by = "SEQN")
+
+#Factor variables
+df_2017 <- df_2017 %>% 
+  mutate(SEX = as.factor(SEX),
+         CURSMOKE = as.factor(CURSMOKE),
+         DIABETES = as.factor(DIABETES),
+         BPMEDS = as.factor(BPMEDS)
+  )
+
+# Get blood pressure based on whether or not on BPMEDS
+df_2017$SYSBP_UT <- ifelse(df_2017$BPMEDS == 0, 
+                           df_2017$SYSBP, 0)
+df_2017$SYSBP_T <- ifelse(df_2017$BPMEDS == 1, 
+                          df_2017$SYSBP, 0)
+
+#Eligibility Criteria: Age between 31-81 
+df_2017 <- df_2017 %>% filter(AGE >= 30 & AGE <=74) #74?
+```
+
+```{r}
+df_2017 %>% dplyr::select(-SEQN,-BMI,-SYSBP_UT,SYSBP_T) %>%
+  tbl_summary(digits = list(everything() ~ c(2)),
+                   statistic = list(all_continuous() ~ "{mean} ({sd})"),
+                   by = SEX) %>%
+  add_overall() %>% 
+  add_n() %>%
+  modify_header(label ~ "**Sex**") %>%
+  modify_spanning_header(c("stat_1", "stat_2") ~ "**Sex**") %>%
+  bold_labels()
+
+```
+
+```{=tex}
+\begin{table}[htbp]
+  \centering
+  \begin{threeparttable}
+    \caption{Summary Statistics by Sex (2017)}
+    \begin{tabular}{lcc}
+      \toprule
+      \multicolumn{1}{c}{} & \multicolumn{2}{c}{\textbf{Sex}} \\
+      \cmidrule{2-3}
+      \textbf{Variable} & \textbf{Female} & \textbf{Male} \\
+      \midrule
+      \multicolumn{3}{l}{\textit{Continuous Variables}} \\
+      Variable\_1 & mean (sd) & mean (sd) \\
+      Variable\_2 & mean (sd) & mean (sd) \\
+      \midrule
+      \multicolumn{3}{l}{\textit{Categorical Variables}} \\
+      Variable\_3 & mean (sd) & mean (sd) \\
+      Variable\_4 & mean (sd) & mean (sd) \\
+      \midrule
+      \textbf{Overall} & mean (sd) & mean (sd) \\
+      \textbf{N} & n & n \\
+      \bottomrule
+    \end{tabular}
+    \begin{tablenotes}
+      \item \textit{Note:} Summary statistics for variables by sex. Continuous variables display mean and standard deviation (sd).
+    \end{tablenotes}
+  \end{threeparttable}
+\end{table}
+```
+### Missing Data
+
+```{r}
+vis_miss(df_2017 %>% dplyr::select(HDLC,TOTCHOL,AGE,BPMEDS,SYSBP_UT,SYSBP_T,CURSMOKE,DIABETES))
+
+apply(df_2017,2,function(x) sum(is.na(x))/nrow(df_2017))
+sum(complete.cases(df_2017))/nrow(df_2017)
+
+#Complete case Analysis
+#df_2017 <- na.omit(df_2017)
+```
+
+# Methods
+
+### Metrics for Evaluation (BRIER SCORE)
+
+```{r}
+#Calulate Brier score for two models in framingham dataset.
+#Men Brierscore
+pred_prob_men <- predict(mod_men, framingham_df_men, type = "response")
+brier_men_fram <- sum((framingham_df_men$CVD - pred_prob_men)^2)/nrow(framingham_df_men)
+
+#Women Brierscore
+pred_prob_women <- predict(mod_women, framingham_df_women, type = "response")
+brier_women_fram <- sum((framingham_df_women$CVD - pred_prob_women)^2)/nrow(framingham_df_women)
+
+c(brier_men_fram,brier_women_fram)
+
+```
+
+### Transportability Analysis (formula for estimated brier score)
+
+```{r}
+#Merge datasets while select only variables in model
+#The variable S is indicator for individual being on the framingham dataset
+fram_df_men <- framingham_df_men %>% 
+  dplyr::select(CVD,HDLC,TOTCHOL,AGE,SYSBP_UT,SYSBP_T,CURSMOKE,DIABETES)
+y_men <- framingham_df_men %>% dplyr::select(CVD)
+fram_df_men$S <- 1
+
+fram_df_women <- framingham_df_women %>%
+  dplyr::select(CVD,HDLC,TOTCHOL,AGE,SYSBP_UT,SYSBP_T,CURSMOKE,DIABETES)
+y_women <- framingham_df_women %>% dplyr::select(CVD)
+fram_df_women$S <- 1
+
+df_2017 <- df_2017 %>% 
+  dplyr::select(HDLC,TOTCHOL,AGE,SYSBP_UT,SYSBP_T,CURSMOKE,DIABETES,SEX)
+df_2017$S <- 0
+df_2017$CVD <- NA
+
+#re-order variables
+df_2017 <- df_2017 %>% 
+  dplyr::select(CVD,HDLC,TOTCHOL,AGE,SYSBP_UT,SYSBP_T,CURSMOKE,DIABETES,SEX,S)
+
+
+nhanes_men <- df_2017 %>% 
+  filter(SEX == "1") %>%
+  dplyr::select(!SEX)
+
+nhanes_women <- df_2017 %>% 
+  filter(SEX == "2") %>%
+  dplyr::select(!SEX)
+
+#merge data
+join_men <- rbind(fram_df_men,nhanes_men)
+join_women <- rbind(fram_df_women, nhanes_women)
+
+#factor S
+join_men$S <- as.factor(join_men$S)
+join_women$S <- as.factor(join_women$S)
+
+
+```
+
+```{r}
+
+
+library(mice)
+
+#IMPUTATION MEN
+nhanes_men_out <- mice(nhanes_men %>% select(-CVD),5, pri=F, seed = 1)
+df_imp_men <- vector("list",5)    
+for (i in 1:5){df_imp_men[[i]] <- rbind(fram_df_men %>% select(-CVD),mice::complete(nhanes_men_out,i))}
+
+nhanes_men_brier <- NA
+for (i in 1:5) {
+  df <- df_imp_men[[i]]
+  #FIT Inverse Odds
+  #Do the same:
+  inv_odd_men <- glm(as.factor(S) ~ log(HDLC)+log(TOTCHOL)+log(AGE)+log(SYSBP_UT+1)+ log(SYSBP_T+1)+CURSMOKE+DIABETES ,
+                       data = df, 
+                       family = "binomial")
+  prob_fram_men <- predict(inv_odd_men, join_men, type = "response")
+  inv_prob_fram_men <- (prob_fram_men/(1-prob_fram_men))^(-1)
+  
+  nhanes_men_brier[i] <- sum(inv_prob_fram_men[1:length(y_men$CVD)]*(y_men$CVD - pred_prob_men)^2)/nrow(df %>% filter(S==0))
+}
+brier_nhanes_men <- mean(nhanes_men_brier)
+sd_brier_nhanes_men <- sd(nhanes_men_brier)
+
+#IMPUTATION WOMEN
+nhanes_women_out <- mice(nhanes_women %>% select(-CVD),5, pri=F, seed = 1)
+df_imp_women <- vector("list",5)    
+for (i in 1:5){df_imp_women[[i]] <- rbind(fram_df_women %>% select(-CVD),mice::complete(nhanes_women_out,i))}
+
+nhanes_women_brier <- NA
+for (i in 1:5) {
+  df <- df_imp_women[[i]]
+  #FIT Inverse Odds
+#Do the same:
+inv_odd_women <- glm(as.factor(S) ~ log(HDLC)+log(TOTCHOL)+log(AGE)+log(SYSBP_UT+1)+ log(SYSBP_T+1)+CURSMOKE+DIABETES ,
+                     data = df, 
+                     family = "binomial")
+prob_fram_women <- predict(inv_odd_women, join_women, type = "response")
+inv_prob_fram_women <- (prob_fram_women/(1-prob_fram_women))^(-1)
+
+nhanes_women_brier[i] <- sum(inv_prob_fram_women[1:length(y_women$CVD)]*(y_women$CVD - pred_prob_women)^2)/nrow(df %>% filter(S==0))
+}
+brier_nhanes_women <- mean(nhanes_women_brier)
+sd_brier_nhanes_women <- sd(nhanes_women_brier)
+
+```
+
+```{r}
+################################################################################
+####MEN
+#FIT Inverse Odds
+inv_odd_men <- glm(as.factor(S) ~ log(HDLC)+log(TOTCHOL)+log(AGE)+log(SYSBP_UT+1)+
+                     log(SYSBP_T+1)+CURSMOKE+DIABETES, 
+                   data = join_men, family = "binomial")
+#predict
+prob_fram_men <- predict(inv_odd_men, join_men, type = "response")
+#weights
+inv_prob_fram_men <- (prob_fram_men/(1-prob_fram_men))^(-1)
+#attach to dataset
+join_men$pred_prob_weighted <- inv_prob_fram_men
+join_men$pred_prob <- prob_fram_men
+
+#calculate estimate of brier score
+
+#another way to calculate (gives the same)
+nhanes_men_brier <- sum(inv_prob_fram_men[1:length(y_men$CVD)]*(y_men$CVD - pred_prob_men)^2)/nrow(nhanes_men)
+
+####WOMEN
+#FIT Inverse Odds
+#Do the same:
+inv_odd_women <- glm(as.factor(S) ~ log(HDLC)+log(TOTCHOL)+log(AGE)+log(SYSBP_UT+1)+
+                       log(SYSBP_T+1)+CURSMOKE+DIABETES ,data = join_women, family = "binomial")
+prob_fram_women <- predict(inv_odd_women, join_women, type = "response")
+inv_prob_fram_women <- (prob_fram_women/(1-prob_fram_women))^(-1)
+join_women$pred_prob_weighted <- inv_prob_fram_women
+join_women$pred_prob <- prob_fram_women
+
+nhanes_women_brier <- sum(inv_prob_fram_women[1:length(y_women$CVD)]*(y_women$CVD - pred_prob_women)^2)/nrow(nhanes_women)
+
+
+#both estimates of brier scores
+c(nhanes_men_brier,nhanes_women_brier)
+
+```
+
+### Simulation (ADEMP)
+
+```{r fig.width=8,fig.height=10}
+
+#MODEL USES: TOTCHOL,AGE,SYSBP,DIABP,HLDC SYSBP_T, SYSBP_UT, CURSMOKE and DIABETES
+#SYSBP_UT and SYSBP_T are based on categorical variable BPMEDS
+
+#Here we plot distributions of numeric variables of framinham dataset
+#Continuous: TOTCHOL, AGE, DIABP, HDLC SYSSBP_T SYSBP_UT
+
+##HLDC
+hdlc_women <- ggplot(fram_df_women, aes(x = log(HDLC)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(fram_df_women$HDLC)), sd = sd(log(fram_df_women$HDLC))), color = "red")+
+  theme_minimal() +
+  ggtitle("Log(HDLC)")
+hdlc_men <- ggplot(fram_df_men, aes(x = log(HDLC)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(fram_df_men$HDLC)), sd = sd(log(fram_df_men$HDLC))), color = "red")+
+  theme_minimal() +
+  ggtitle("Log(HDLC)")
+
+
+##TOTCHOL
+totchol_women <- ggplot(fram_df_women, aes(x = log(TOTCHOL)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(fram_df_women$TOTCHOL)), sd = sd(log(fram_df_women$TOTCHOL))), color = "red")+
+  theme_minimal() +
+  ggtitle("Log(TOTCHOL)")
+totchol_men <- ggplot(fram_df_men, aes(x = log(TOTCHOL)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(fram_df_men$TOTCHOL)), sd = sd(log(fram_df_men$TOTCHOL))), color = "red")+
+  theme_minimal() +
+  ggtitle("Log(TOTCHOL)")
+
+##AGE 
+age_women <- ggplot(fram_df_women, aes(x = log(AGE)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(fram_df_women$AGE)), sd = sd(log(fram_df_women$AGE))), color = "red")+
+  theme_minimal() +
+  ggtitle("Log(AGE)")
+age_men <- ggplot(fram_df_men, aes(x = log(AGE)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(fram_df_men$AGE)), sd = sd(log(fram_df_men$AGE))), color = "red")+
+  theme_minimal() +
+  ggtitle("Log(AGE)")
+
+
+
+sys_women <- ggplot(fram_df_women, aes(x = log(AGE)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(fram_df_women$AGE)), sd = sd(log(fram_df_women$AGE))), color = "red")+
+  theme_minimal() +
+  ggtitle("Log(AGE)")
+
+##SYSBP
+xx <- fram_df_women %>% dplyr::select(SYSBP_T) %>% filter(SYSBP_T != 0)
+xx <- as.data.frame(xx)
+sysbpT_women <- ggplot(xx,aes(log(SYSBP_T)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(xx$SYSBP_T)), sd = sd(log(xx$SYSBP_T))), color = "red")+
+  theme_minimal() + 
+  ggtitle("Log(SYSBP_T)")
+
+xx <- fram_df_men %>% dplyr::select(SYSBP_T) %>% filter(SYSBP_T != 0)
+xx <- as.data.frame(xx)
+sysbpT_men <- ggplot(xx,aes(log(SYSBP_T)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(xx$SYSBP_T)), sd = sd(log(xx$SYSBP_T))), color = "red")+
+  theme_minimal() + 
+  ggtitle("Log(SYSBP_T)")
+
+##SYSBP_UT
+xx <- fram_df_women %>% dplyr::select(SYSBP_UT) %>% filter(SYSBP_UT != 0)
+xx <- as.data.frame(xx)
+sysbpUT_women <- ggplot(xx,aes(log(SYSBP_UT)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(xx$SYSBP_UT)), sd = sd(log(xx$SYSBP_UT))), color = "red")+
+  theme_minimal() + 
+  ggtitle("Log(SYSBP_UT)")
+
+xx <- fram_df_men %>% dplyr::select(SYSBP_UT) %>% filter(SYSBP_UT != 0)
+xx <- as.data.frame(xx)
+sysbpUT_men <- ggplot(xx,aes(log(SYSBP_UT)))+geom_density()+
+  stat_function(fun = dnorm, args = list(mean = mean(log(xx$SYSBP_UT)), sd = sd(log(xx$SYSBP_UT))), color = "red")+
+  theme_minimal() + 
+  ggtitle("Log(SYSBP_UT)")
+
+p1 <- ggarrange(hdlc_men,totchol_men,age_men,sysbpT_men,sysbpUT_men,nrow = 5) %>% annotate_figure(top = text_grob("Women"))
+p2 <- ggarrange(hdlc_women,totchol_women,age_women,sysbpT_women,sysbpUT_women,nrow=5) %>% annotate_figure(top = text_grob("Men"))
+
+ggarrange(p1,p2,ncol = 2) %>% annotate_figure(top = text_grob("Continuos Densities with Normal Approximations", size = 14, face = "bold"))
+
+```
+
+```{r}
+
+############################################################################################################################################################################################################################################################################################################################################################################################################################
+
+df_imp_women[[i]] %>% nrow()
+df_imp_men[[i]] %>% nrow()
+
+#FUNCTION TO GENERATE WHILE VARYING CORRELATIONS WOMEN
+
+sim_data_function_men <- function(data,mu,cov){
+  
+framingham_df_men_log <- data %>% 
+  mutate(log_HDLC = log(HDLC), 
+         log_TOTCHOL = log(TOTCHOL),
+         log_AGE = log(AGE),
+         log_SYSBP = log(SYSBP)) %>%
+  dplyr::select(log_HDLC,log_TOTCHOL,log_AGE,log_SYSBP,BPMEDS,CURSMOKE,DIABETES)
+
+
+sim_data <- mvrnorm(n = 3055, mu = mu, Sigma = cov)
+sim_data <- as.data.frame(sim_data)
+
+#CHANGE BPMEDS TO CATEGORICAL
+pp <- sum(as.numeric(data$BPMEDS)-1)/nrow(data)
+sim_data$BPMEDS <- ifelse(sim_data$BPMEDS > quantile(sim_data$BPMEDS, 1 - pp), 1, 0)
+
+#CHANGE DIABETES TO CATEGORICAL
+pp <- sum(as.numeric(data$DIABETES)-1)/nrow(data)
+sim_data$DIABETES <- ifelse(sim_data$DIABETES > quantile(sim_data$DIABETES, 1 - pp), 1, 0)
+
+#CHANGE CURSMOKE TO CATEGORICAL
+pp <- sum(as.numeric(data$CURSMOKE)-1)/nrow(data)
+sim_data$CURSMOKE <- ifelse(sim_data$CURSMOKE > quantile(sim_data$CURSMOKE, 1 - pp), 1, 0)
+
+
+return(sim_data)
+}
+
+
+#FUNCTION TO GENERATE WHILE VARYING CORRELATIONS WOMEN
+
+sim_data_function_women <- function(data,mu,cov){
+  
+  framingham_df_women_log <- data %>% 
+  mutate(log_HDLC = log(HDLC), 
+         log_TOTCHOL = log(TOTCHOL),
+         log_AGE = log(AGE),
+         log_SYSBP = log(SYSBP)) %>%
+  dplyr::select(log_HDLC,log_TOTCHOL,log_AGE,log_SYSBP,BPMEDS,CURSMOKE,DIABETES)
+
+sim_data <- mvrnorm(n = 3544, mu = mu, Sigma = cov)
+sim_data <- as.data.frame(sim_data)
+
+#CHANGE BPMEDS TO CATEGORICAL
+pp <- sum(as.numeric(data$BPMEDS)-1)/nrow(data)
+sim_data$BPMEDS <- ifelse(sim_data$BPMEDS > quantile(sim_data$BPMEDS, 1 - pp), 1, 0)
+
+#CHANGE DIABETES TO CATEGORICAL
+pp <- sum(as.numeric(data$DIABETES)-1)/nrow(data)
+sim_data$DIABETES <- ifelse(sim_data$DIABETES > quantile(sim_data$DIABETES, 1 - pp), 1, 0)
+
+#CHANGE CURSMOKE TO CATEGORICAL
+pp <- sum(as.numeric(data$CURSMOKE)-1)/nrow(data)
+sim_data$CURSMOKE <- ifelse(sim_data$CURSMOKE > quantile(sim_data$CURSMOKE, 1 - pp), 1, 0)
+
+return(sim_data)
+}
+```
+
+```{r}
+##HIGLY CORRELATED DATASET
+#https://stats.stackexchange.com/questions/124538/how-to-generate-a-large-full-rank-random-correlation-matrix-with-some-strong-cor
+# Generate W matrix with random values from a standard normal distribution
+
+v <- 7          # 12 variables
+f <- 5          # Subset-correlation 
+vg <- v / f     # Variables per subset
+a <- 5        
+d <- 100       
+# Constructing a factor matrix 'L' with higher magnitude positive and negative relationships
+set.seed(3)
+L <- matrix(c(
+  runif(vg*f, -a, a), runif(vg*f, -a, a)/d, runif(vg*f, -a, a)/d,
+  runif(vg*f, -a, a)/d, runif(vg*f, -a, a), runif(vg*f, -a, a)/d,
+  runif(vg*f, -a, a)/d, runif(vg*f, -a, a)/d, runif(vg*f, -a, a)
+), nrow = v, ncol = v)
+
+names <- c("log_HDLC","log_TOTCHOL","log_AGE","log_SYSBP","BPMEDS","CURSMOKE","DIABETES")
+colnames(L) <- names
+rownames(L) <- names
+
+# Make covariance and correlation matrix
+cov_matrix <- L %*% t(L)
+colnames(cov_matrix) <- names
+rownames(cov_matrix) <- names # L multiplied with its transpose
+cor_high<- cov2cor(cov_matrix)
+
+
+```
+
+```{r}
+##Medium CORRELATED DATASET
+#https://stats.stackexchange.com/questions/124538/how-to-generate-a-large-full-rank-random-correlation-matrix-with-some-strong-cor
+# Generate W matrix with random values from a standard normal distribution
+
+v <- 7          # 12 variables
+f <- 1          # Subset-correlation based on 5 common factors
+vg <- v / f     # Variables per subset
+a <- .1         
+d <- 5          
+
+# Constructing a factor matrix 'L' with higher magnitude positive and negative relationships
+set.seed(1)
+L <- matrix(c(
+  runif(vg*f, -a, a), runif(vg*f, -a, a)/d, runif(vg*f, -a, a)/d,
+  runif(vg*f, -a, a)/d, runif(vg*f, -a, a), runif(vg*f, -a, a)/d,
+  runif(vg*f, -a, a)/d, runif(vg*f, -a, a)/d, runif(vg*f, -a, a)
+), nrow = v, ncol = v)
+
+
+colnames(L) <- names
+rownames(L) <- names
+
+# Make covariance and correlation matrix
+cov_matrix <- L %*% t(L)
+colnames(cov_matrix) <- names
+rownames(cov_matrix) <- names # L multiplied with its transpose
+cor_med <- cov2cor(cov_matrix)
+
+ggcorrplot(cor_med)
+
+# Show correlation matrix
+
+
+
+```
+
+```{r fig.width=8,fig.height=8}
+#Statistic from dataset
+
+#MEN
+framingham_df_men_log <- framingham_df_men %>% 
+  mutate(log_HDLC = log(HDLC), 
+         log_TOTCHOL = log(TOTCHOL),
+         log_AGE = log(AGE),
+         log_SYSBP = log(SYSBP)) %>%
+  dplyr::select(log_HDLC,log_TOTCHOL,log_AGE,log_SYSBP,BPMEDS,CURSMOKE,DIABETES)
+
+mu_men <- framingham_df_men_log %>% 
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  summarize_if(is.numeric,mean)
+
+sd_men <- framingham_df_men_log %>% 
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  summarize_if(is.numeric,sd)
+
+#WOMEN
+framingham_df_women_log <- framingham_df_women %>% 
+  mutate(log_HDLC = log(HDLC), 
+         log_TOTCHOL = log(TOTCHOL),
+         log_AGE = log(AGE),
+         log_SYSBP = log(SYSBP)) %>%
+  dplyr::select(log_HDLC,log_TOTCHOL,log_AGE,log_SYSBP,BPMEDS,CURSMOKE,DIABETES)
+
+mu_women <- framingham_df_women_log %>% 
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  summarize_if(is.numeric,mean)
+
+sd_women <- framingham_df_women_log %>% 
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  summarize_if(is.numeric,sd)
+
+
+
+#NO CORRELATION
+cor_no <- diag(1,7)
+colnames(cor_no) <- names
+rownames(cor_no) <- names
+
+cov_no <- diag(sd_men) %*% cor_no %*% diag(sd_men)
+colnames(cov_no) <- names
+rownames(cov_no) <- names
+
+cov_no_women <- diag(sd_women) %*% cor_no %*% diag(sd_women)
+colnames(cov_no_women) <- names
+rownames(cov_no_women) <- names
+
+```
+
+```{r fig.width=8,fig.height=10}
+p.cor.high <- ggcorrplot(cor_high) + ggtitle("High Correlation")
+p.cor.med <- ggcorrplot(cor_med) + ggtitle("Moderate Correlation")
+p.cor.no <- ggcorrplot(cor_no) + ggtitle("Independent")
+
+ggarrange(p.cor.no,p.cor.med,p.cor.high,common.legend = T)
+ 
+ggarrange(ggarrange(p.cor.no,p.cor.med,ncol = 2, legend = "none"),p.cor.high,nrow = 2, legend = "bottom")
+
+###################################
+#SIMILAR CORRELATION WITH FRAMINGHAM DATASET
+cov_men <- framingham_df_men_log %>% 
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  cov()
+
+
+sim_data_similar_men <- sim_data_function_men(framingham_df_men, as.numeric(mu_men), cov_men)
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_similar_men$log_SYSBP_UT <- ifelse(sim_data_similar_men$BPMEDS == 0, 
+                           sim_data_similar_men$log_SYSBP, 0)
+sim_data_similar_men$log_SYSBP_T <- ifelse(sim_data_similar_men$BPMEDS == 1, 
+                          sim_data_similar_men$log_SYSBP, 0)
+
+sim_data_similar_men_2 <- sim_data_similar_men %>% 
+  dplyr::select(log_HDLC,log_TOTCHOL,log_AGE, log_SYSBP_UT,log_SYSBP_T,CURSMOKE,DIABETES)
+
+p1 <- sim_data_similar_men %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T,-S) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("MEN Framingham Simulated Correlation")
+
+p <- framingham_df_men_log %>% 
+  dplyr::select(-S,-log_SYSBP_T,-log_SYSBP_UT)%>%
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  cor() %>%
+  ggcorrplot()+ggtitle("Framingham Correlation") #same summary statistics
+ 
+
+ggarrange(p1,p,common.legend = T,legend = "bottom")
+
+##SIMULATION
+brier_similar_men <- numeric(0)
+for(i in 1:5000){
+sim_data_similar_men <- sim_data_function_men(framingham_df_men, as.numeric(mu_men), cov_men)
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_similar_men$log_SYSBP_UT <- ifelse(sim_data_similar_men$BPMEDS == 0, 
+                           sim_data_similar_men$log_SYSBP, 0)
+sim_data_similar_men$log_SYSBP_T <- ifelse(sim_data_similar_men$BPMEDS == 1, 
+                          sim_data_similar_men$log_SYSBP, 0)
+
+##ESTIMATE BRIER SCORE
+####MEN
+framingham_df_men_log$S <- 1
+#FIT Inverse Odds
+framingham_df_men_log$log_SYSBP_UT <- ifelse(framingham_df_men_log$BPMEDS == 0, 
+                           framingham_df_men_log$log_SYSBP, 0)
+framingham_df_men_log$log_SYSBP_T <- ifelse(framingham_df_men_log$BPMEDS == 1, 
+                          framingham_df_men_log$log_SYSBP, 0)
+
+sim_data_similar_men$S <- 0
+join_men <- rbind(framingham_df_men_log,sim_data_similar_men)
+
+inv_odd_men <- glm(as.factor(S) ~ log_HDLC + log_TOTCHOL + log_AGE + log_SYSBP_UT
+                   +log_SYSBP_T + CURSMOKE+DIABETES, 
+                   data = join_men, family = "binomial")
+prob_fram_men <- predict(inv_odd_men, join_men, type = "response")
+inv_prob_fram_men <- (prob_fram_men/(1-prob_fram_men))^(-1)
+
+brier_similar_men[i] <- sum(inv_prob_fram_men[1:length(y_men$CVD)]*(y_men$CVD - pred_prob_men)^2)/nrow(sim_data_similar_men)
+print(i)
+}
+brier_similar_men_avg <- mean(brier_similar_men)
+brier_similar_men_sd <- sd(brier_similar_men)
+pbrier_similar_men <- ggplot(as.data.frame(brier_similar_men),aes(x = brier_similar_men))+
+  geom_histogram(color = "black", fill = "grey") + # Adjust color and bin width
+  labs(
+    title = "Similar Correlation",
+    x = "Brier Score",
+    y = "Frequency")+
+  theme_minimal()
+
+
+```
+
+```{r}
+############GENERATE DATA
+
+##HIGH CORRELATION
+cov_men <- diag(sd_men) %*% cor_high %*% diag(sd_men)
+colnames(cov_men) <- names
+rownames(cov_men) <- names
+
+sim_data_high_men <- sim_data_function_men(framingham_df_men, as.numeric(mu_men), cov_men)
+
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_high_men$log_SYSBP_UT <- ifelse(sim_data_high_men$BPMEDS == 0, 
+                           sim_data_high_men$log_SYSBP, 0)
+sim_data_high_men$log_SYSBP_T <- ifelse(sim_data_high_men$BPMEDS == 1, 
+                          sim_data_high_men$log_SYSBP, 0)
+
+p2 <- sim_data_high_men %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("High Correlation")
+
+##SIMULATION
+brier_high_men <- numeric(0)
+for(i in 1:5000){
+sim_data_high_men <- sim_data_function_men(framingham_df_men, as.numeric(mu_men), cov_men)
+
+
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_high_men$log_SYSBP_UT <- ifelse(sim_data_high_men$BPMEDS == 0, 
+                           sim_data_high_men$log_SYSBP, 0)
+sim_data_high_men$log_SYSBP_T <- ifelse(sim_data_high_men$BPMEDS == 1, 
+                          sim_data_high_men$log_SYSBP, 0)
+
+
+##ESTIMATE BRIER SCORE
+####MEN
+#FIT Inverse Odds
+framingham_df_men_log$S <- 1
+sim_data_high_men$S <- 0
+
+join_men <- rbind(framingham_df_men_log, sim_data_high_men)
+inv_odd_men <- glm(as.factor(S) ~ log_HDLC + log_TOTCHOL + log_AGE + log_SYSBP_UT
+                   +log_SYSBP_T + CURSMOKE+DIABETES, 
+                   data = join_men, family = "binomial")
+prob_fram_men <- predict(inv_odd_men, join_men, type = "response")
+inv_prob_fram_men <- (prob_fram_men/(1-prob_fram_men))^(-1)
+
+
+brier_high_men[i] <- sum(inv_prob_fram_men[1:length(y_men$CVD)]*(y_men$CVD - pred_prob_men )^2)/nrow(sim_data_high_men)
+print(i)
+}
+
+brier_high_men_avg <- mean(brier_high_men)
+brier_high_men_sd <- sd(brier_high_men)
+pbrier_high_men <- ggplot(as.data.frame(brier_high_men),aes(x = brier_high_men))+
+  geom_histogram(color = "black", fill = "grey") + # Adjust color and bin width
+  labs(
+    title = "High Correlation",
+    x = "Brier Score",
+    y = "Frequency")+
+  theme_minimal()
+
+##################
+#Medium 
+##GENERATE DATA
+
+cov_men <- diag(sd_men) %*% cor_med %*% diag(sd_men)
+colnames(cov_men) <- names
+rownames(cov_men) <- names
+
+sim_data_med_men <- sim_data_function_men(framingham_df_men, as.numeric(mu_men), cov_men)
+
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_med_men$log_SYSBP_UT <- ifelse(sim_data_med_men$BPMEDS == 0, 
+                           sim_data_med_men$log_SYSBP, 0)
+sim_data_med_men$log_SYSBP_T <- ifelse(sim_data_med_men$BPMEDS == 1, 
+                          sim_data_med_men$log_SYSBP, 0)
+
+p3 <- sim_data_med_men %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("Medium Correlation")
+
+#SIMULATION
+brier_med_men <- numeric(0)
+for(i in 1:5000){
+sim_data_med_men <- sim_data_function_men(framingham_df_men, as.numeric(mu_men), cov_men)
+
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_med_men$log_SYSBP_UT <- ifelse(sim_data_med_men$BPMEDS == 0, 
+                           sim_data_med_men$log_SYSBP, 0)
+sim_data_med_men$log_SYSBP_T <- ifelse(sim_data_med_men$BPMEDS == 1, 
+                          sim_data_med_men$log_SYSBP, 0)
+##ESTIMATE BRIER SCORE
+####MEN
+#FIT Inverse Odds
+sim_data_med_men$S <- 0
+
+
+
+join_men <- rbind(framingham_df_men_log,sim_data_med_men)
+inv_odd_men <- glm(as.factor(S) ~ log_HDLC + log_TOTCHOL + log_AGE + log_SYSBP_UT
+                   +log_SYSBP_T + CURSMOKE+ DIABETES, 
+                   data = join_men, family = "binomial")
+prob_fram_men <- predict(inv_odd_men, join_men, type = "response")
+inv_prob_fram_men <- (prob_fram_men/(1-prob_fram_men))^(-1)
+
+
+brier_med_men[i] <- sum(inv_prob_fram_men[1:length(y_men$CVD)]*(y_men$CVD - pred_prob_men)^2)/nrow(sim_data_med_men)
+print(i)
+}
+
+brier_med_men_avg <- mean(brier_med_men)
+brier_med_men_sd <- sd(brier_med_men)
+pbrier_med_men <- ggplot(as.data.frame(brier_med_men),aes(x = brier_med_men))+
+  geom_histogram(color = "black", fill = "grey") + # Adjust color and bin width
+  labs(
+    title = "Medium Correlation",
+    x = "Brier Score",
+    y = "Frequency")+
+  theme_minimal()
+
+##NO CORR
+sim_data_nocor_men <- sim_data_function_men(framingham_df_men, as.numeric(mu_men), cov_no)
+
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_nocor_men$log_SYSBP_UT <- ifelse(sim_data_nocor_men$BPMEDS == 0, 
+                           sim_data_nocor_men$log_SYSBP, 0)
+sim_data_nocor_men$log_SYSBP_T <- ifelse(sim_data_nocor_men$BPMEDS == 1, 
+                          sim_data_nocor_men$log_SYSBP, 0)
+
+p4 <- sim_data_nocor_men %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("No Correlation (Men)")
+
+#SIMULATION
+brier_nocor_men <- numeric(0)
+for(i in 1:5000){
+sim_data_nocor_men <- sim_data_function_men(framingham_df_men, as.numeric(mu_men), cov_no)
+
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_nocor_men$log_SYSBP_UT <- ifelse(sim_data_nocor_men$BPMEDS == 0, 
+                           sim_data_nocor_men$log_SYSBP, 0)
+sim_data_nocor_men$log_SYSBP_T <- ifelse(sim_data_nocor_men$BPMEDS == 1, 
+                          sim_data_nocor_men$log_SYSBP, 0)
+##ESTIMATE BRIER SCORE
+####MEN
+#FIT Inverse Odds
+sim_data_nocor_men$S <- 0
+
+join_men <- rbind(framingham_df_men_log,sim_data_nocor_men)
+inv_odd_men <- glm(as.factor(S) ~ log_HDLC + log_TOTCHOL + log_AGE + log_SYSBP_UT
+                   +log_SYSBP_T + CURSMOKE+ DIABETES, 
+                   data = join_men, family = "binomial")
+prob_fram_men <- predict(inv_odd_men, join_men, type = "response")
+inv_prob_fram_men <- (prob_fram_men/(1-prob_fram_men))^(-1)
+
+
+brier_nocor_men[i] <- sum(inv_prob_fram_men[1:length(y_men$CVD)]*(y_men$CVD - pred_prob_men)^2)/nrow(sim_data_nocor_men)
+print(i)
+}
+
+brier_nocor_men_avg <- mean(brier_nocor_men)
+brier_nocor_men_sd <- sd(brier_nocor_men)
+pbrier_nocor_men <- ggplot(as.data.frame(brier_nocor_men),aes(x = brier_nocor_men))+
+  geom_histogram(color = "black", fill = "grey") + # Adjust color and bin width
+  labs(
+    title = "Independent Correlation",
+    x = "Brier Score",
+    y = "Frequency")+
+  theme_minimal()
+
+
+ c(brier_nhanes_men,brier_similar_men_avg,brier_med_men_avg,brier_high_men_avg,brier_nocor_men_avg)
+ 
+```
+
+```{r}
+#####################################################################################################################################################################################################WOMEN##################################################################################################################################################################################################################################################################################################
+
+
+
+###################################
+#SIMILAR CORRELATION WITH FRAMINGHAM DATASET
+cov_women <- framingham_df_women_log %>% 
+  dplyr::select(names)%>%
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  cov()
+
+
+sim_data_similar_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_women)
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_similar_women$log_SYSBP_UT <- ifelse(sim_data_similar_women$BPMEDS == 0, 
+                                            sim_data_similar_women$log_SYSBP, 0)
+sim_data_similar_women$log_SYSBP_T <- ifelse(sim_data_similar_women$BPMEDS == 1, 
+                                           sim_data_similar_women$log_SYSBP, 0)
+
+
+p1 <- sim_data_similar_women %>%
+  dplyr::select(-S)%>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("Women Framingham Simulated Correlation")
+
+p <- framingham_df_women_log %>% 
+  dplyr::select(-S,-log_SYSBP_UT,-log_SYSBP_T)%>%
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  cor() %>%
+  ggcorrplot()+ggtitle("Framingham Correlation") #same summary statistics
+
+ggarrange(p1,p,common.legend = T,legend = "bottom")
+
+##SIMULATION
+brier_similar_women <- numeric(0)
+for(i in 1:5000){
+  sim_data_similar_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_women)
+  
+  # Get blood pressure based on whether or not on BPMEDS on simulated data
+  sim_data_similar_women$log_SYSBP_UT <- ifelse(sim_data_similar_women$BPMEDS == 0, 
+                                              sim_data_similar_women$log_SYSBP, 0)
+  sim_data_similar_women$log_SYSBP_T <- ifelse(sim_data_similar_women$BPMEDS == 1, 
+                                             sim_data_similar_women$log_SYSBP, 0)
+
+  
+  ##ESTIMATE BRIER SCORE
+  ####women
+  #FIT Inverse Odds
+  framingham_df_women_log$log_SYSBP_UT <- ifelse(framingham_df_women_log$BPMEDS == 0, 
+                                               framingham_df_women_log$log_SYSBP, 0)
+  framingham_df_women_log$log_SYSBP_T <- ifelse(framingham_df_women_log$BPMEDS == 1, 
+                                              framingham_df_women_log$log_SYSBP, 0)
+framingham_df_women_log$S <- 1
+sim_data_similar_women$S <- 0
+ 
+join_women <- rbind(framingham_df_women_log,sim_data_similar_women)
+  
+inv_odd_women <- glm(as.factor(S) ~ log_HDLC + log_TOTCHOL + log_AGE +
+                      log_SYSBP_UT+log_SYSBP_T + CURSMOKE+DIABETES, 
+                     data = join_women, family = "binomial")
+  prob_fram_women <- predict(inv_odd_women, join_women, type = "response")
+  inv_prob_fram_women <- (prob_fram_women/(1-prob_fram_women))^(-1)
+  
+  
+  brier_similar_women[i] <- sum(inv_prob_fram_women[1:length(y_women$CVD)]*(y_women$CVD - pred_prob_women)^2)/nrow(sim_data_similar_women)
+  print(i)
+  
+}
+brier_similar_women_avg <- mean(brier_similar_women)
+brier_similar_women_sd <- sd(brier_similar_women)
+pbrier_similar_women <- ggplot(as.data.frame(brier_similar_women),aes(x = brier_similar_women))+
+  geom_histogram(color = "black", fill = "grey") + # Adjust color and bin width
+  labs(
+    title = "Similar Correlation",
+    x = "Brier Score",
+    y = "Frequency")+
+  theme_minimal()
+
+
+
+
+###################################
+#SIMILAR CORRELATION WITH FRAMINGHAM DATASET
+cov_women <- framingham_df_women_log %>% 
+  dplyr::select(names) %>%
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  cov()
+
+
+sim_data_similar_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_women)
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_similar_women$log_SYSBP_UT <- ifelse(sim_data_similar_women$BPMEDS == 0, 
+                                            sim_data_similar_women$log_SYSBP, 0)
+sim_data_similar_women$log_SYSBP_T <- ifelse(sim_data_similar_women$BPMEDS == 1, 
+                                           sim_data_similar_women$log_SYSBP, 0)
+
+p1 <- sim_data_similar_women %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("women Framingham Simulated Correlation")
+
+p <- framingham_df_women_log %>% 
+  dplyr::select(-S) %>%
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  cor() %>%
+  ggcorrplot()+ggtitle("Framingham Correlation") #same summary statistics
+
+
+##SIMULATION
+brier_similar_women <- numeric(0)
+for(i in 1:5000){
+  sim_data_similar_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_women)
+  
+  # Get blood pressure based on whether or not on BPMEDS on simulated data
+  sim_data_similar_women$log_SYSBP_UT <- ifelse(sim_data_similar_women$BPMEDS == 0, 
+                                              sim_data_similar_women$log_SYSBP, 0)
+  sim_data_similar_women$log_SYSBP_T <- ifelse(sim_data_similar_women$BPMEDS == 1, 
+                                             sim_data_similar_women$log_SYSBP, 0)
+  
+  ##ESTIMATE BRIER SCORE
+  ####women
+  #FIT Inverse Odds
+  framingham_df_women_log$log_SYSBP_UT <- ifelse(framingham_df_women_log$BPMEDS == 0, 
+                                               framingham_df_women_log$log_SYSBP, 0)
+  framingham_df_women_log$log_SYSBP_T <- ifelse(framingham_df_women_log$BPMEDS == 1, 
+                                              framingham_df_women_log$log_SYSBP, 0)
+  framingham_df_women_log$S <- 1
+  sim_data_similar_women$S <- 0
+  
+  join_women <- rbind(framingham_df_women_log,sim_data_similar_women)
+  
+  inv_odd_women <- glm(as.factor(S) ~ log_HDLC + log_TOTCHOL + log_AGE + log_SYSBP_UT
+                     +log_SYSBP_T + CURSMOKE+DIABETES, 
+                     data = join_women, family = "binomial")
+  prob_fram_women <- predict(inv_odd_women, join_women, type = "response")
+  inv_prob_fram_women <- (prob_fram_women/(1-prob_fram_women))^(-1)
+  
+  
+  brier_similar_women[i] <- sum(inv_prob_fram_women[1:length(y_women$CVD)]*(y_women$CVD -pred_prob_women)^2)/nrow(sim_data_similar_women)
+  print(i)
+}
+brier_similar_women_avg <- mean(brier_similar_women)
+brier_similar_women_sd <- sd(brier_similar_women)
+pbrier_similar_women <- ggplot(as.data.frame(brier_similar_women),aes(x = brier_similar_women))+
+  geom_histogram(color = "black", fill = "grey") + # Adjust color and bin width
+  labs(
+    title = "Similar Correlation",
+    x = "Brier Score",
+    y = "Frequency")+
+  theme_minimal()
+```
+
+```{r}
+##HIGH CORRELATION
+cov_women <- diag(sd_women) %*% cor_high %*% diag(sd_women)
+colnames(cov_women) <- names
+rownames(cov_women) <- names
+
+sim_data_high_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_women)
+
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_high_women$log_SYSBP_UT <- ifelse(sim_data_high_women$BPMEDS == 0, 
+                                         sim_data_high_women$log_SYSBP, 0)
+sim_data_high_women$log_SYSBP_T <- ifelse(sim_data_high_women$BPMEDS == 1, 
+                                        sim_data_high_women$log_SYSBP, 0)
+
+p2 <- sim_data_high_women %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("High Correlation")
+
+##SIMULATION
+brier_high_women <- numeric(0)
+for(i in 1:5000){
+  sim_data_high_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_women)
+  
+  
+  # Get blood pressure based on whether or not on BPMEDS on simulated data
+  sim_data_high_women$log_SYSBP_UT <- ifelse(sim_data_high_women$BPMEDS == 0, 
+                                           sim_data_high_women$log_SYSBP, 0)
+  sim_data_high_women$log_SYSBP_T <- ifelse(sim_data_high_women$BPMEDS == 1, 
+                                          sim_data_high_women$log_SYSBP, 0)
+  ##ESTIMATE BRIER SCORE
+  ####women
+  #FIT Inverse Odds
+  sim_data_high_women$S <- 0
+  
+  join_women <- rbind(framingham_df_women_log,sim_data_high_women)
+  inv_odd_women <- glm(as.factor(S) ~ log_HDLC + log_TOTCHOL + log_AGE + log_SYSBP_UT
+                     +log_SYSBP_T + CURSMOKE+ DIABETES, 
+                     data = join_women, family = "binomial")
+  prob_fram_women <- predict(inv_odd_women, join_women, type = "response")
+  inv_prob_fram_women <- (prob_fram_women/(1-prob_fram_women))^(-1)
+  
+  
+  brier_high_women[i] <- sum(inv_prob_fram_women[1:length(y_women$CVD)]*(y_women$CVD -pred_prob_women)^2)/nrow(sim_data_high_women)
+  print(i)
+}
+
+brier_high_women_avg <- mean(brier_high_women)
+brier_high_women_sd <- sd(brier_high_women)
+pbrier_high_women <- ggplot(as.data.frame(brier_high_women),aes(x = brier_high_women))+
+  geom_histogram(color = "black", fill = "grey") + # Adjust color and bin width
+  labs(
+    title = "High Correlation",
+    x = "Brier Score",
+    y = "Frequency")+
+  theme_minimal()
+
+#######
+#Medium 
+##GENERATE DATA
+
+cov_women <- diag(sd_women) %*% cor_med %*% diag(sd_women)
+colnames(cov_women) <- names
+rownames(cov_women) <- names
+
+sim_data_med_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_women)
+
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_med_women$log_SYSBP_UT <- ifelse(sim_data_med_women$BPMEDS == 0, 
+                                        sim_data_med_women$log_SYSBP, 0)
+sim_data_med_women$log_SYSBP_T <- ifelse(sim_data_med_women$BPMEDS == 1, 
+                                       sim_data_med_women$log_SYSBP, 0)
+
+p3 <- sim_data_med_women %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("Medium Correlation")
+
+#SIMULATION
+brier_med_women <- numeric(0)
+for(i in 1:5000){
+  sim_data_med_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_women)
+  
+  
+  # Get blood pressure based on whether or not on BPMEDS on simulated data
+  sim_data_med_women$log_SYSBP_UT <- ifelse(sim_data_med_women$BPMEDS == 0, 
+                                          sim_data_med_women$log_SYSBP, 0)
+  sim_data_med_women$log_SYSBP_T <- ifelse(sim_data_med_women$BPMEDS == 1, 
+                                         sim_data_med_women$log_SYSBP, 0)
+  ##ESTIMATE BRIER SCORE
+  ####women
+  #FIT Inverse Odds
+  sim_data_med_women$S <- 0
+  
+  join_women <- rbind(framingham_df_women_log,sim_data_med_women)
+  inv_odd_women <- glm(as.factor(S) ~ log_HDLC + log_TOTCHOL + log_AGE + log_SYSBP_UT
+                     +log_SYSBP_T + CURSMOKE+ DIABETES, 
+                     data = join_women, family = "binomial")
+  prob_fram_women <- predict(inv_odd_women, join_women, type = "response")
+  inv_prob_fram_women <- (prob_fram_women/(1-prob_fram_women))^(-1)
+  
+  
+  brier_med_women[i] <- sum(inv_prob_fram_women[1:length(y_women$CVD)]*(y_women$CVD - pred_prob_women)^2)/nrow(sim_data_med_women)
+  print(i)
+}
+
+brier_med_women_avg <- mean(brier_med_women)
+brier_med_women_sd <- sd(brier_med_women)
+pbrier_med_women <- ggplot(as.data.frame(brier_med_women),aes(x = brier_med_women))+
+  geom_histogram(color = "black", fill = "grey") + # Adjust color and bin width
+  labs(
+    title = "Medium Correlation",
+    x = "Brier Score",
+    y = "Frequency")+
+  theme_minimal()
+
+
+######
+#############
+##NO CORR
+sim_data_nocor_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_no)
+
+
+# Get blood pressure based on whether or not on BPMEDS on simulated data
+sim_data_nocor_women$log_SYSBP_UT <- ifelse(sim_data_nocor_women$BPMEDS == 0, 
+                                          sim_data_nocor_women$log_SYSBP, 0)
+sim_data_nocor_women$log_SYSBP_T <- ifelse(sim_data_nocor_women$BPMEDS == 1, 
+                                         sim_data_nocor_women$log_SYSBP, 0)
+
+p4 <- sim_data_nocor_women %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("No Correlation (women)")
+
+#SIMULATION
+brier_nocor_women <- numeric(0)
+for(i in 1:5000){
+  sim_data_nocor_women <- sim_data_function_women(framingham_df_women, as.numeric(mu_women), cov_no)
+  
+  
+  # Get blood pressure based on whether or not on BPMEDS on simulated data
+  sim_data_nocor_women$log_SYSBP_UT <- ifelse(sim_data_nocor_women$BPMEDS == 0, 
+                                            sim_data_nocor_women$log_SYSBP, 0)
+  sim_data_nocor_women$log_SYSBP_T <- ifelse(sim_data_nocor_women$BPMEDS == 1, 
+                                           sim_data_nocor_women$log_SYSBP, 0)
+  ##ESTIMATE BRIER SCORE
+  ####women
+  #FIT Inverse Odds
+  sim_data_nocor_women$S <- 0
+  
+  join_women <- rbind(framingham_df_women_log,sim_data_nocor_women)
+  inv_odd_women <- glm(as.factor(S) ~ log_HDLC + log_TOTCHOL + log_AGE + log_SYSBP_UT
+                     +log_SYSBP_T + CURSMOKE+ DIABETES, 
+                     data = join_women, family = "binomial")
+  prob_fram_women <- predict(inv_odd_women, join_women, type = "response")
+  inv_prob_fram_women <- (prob_fram_women/(1-prob_fram_women))^(-1)
+  
+  
+  brier_nocor_women[i] <- sum(inv_prob_fram_women[1:length(y_women$CVD)]*(y_women$CVD - pred_prob_women)^2)/nrow(sim_data_nocor_women)
+  print(i)
+}
+
+brier_nocor_women_avg <- mean(brier_nocor_women)
+brier_nocor_women_sd <- sd(brier_nocor_women)
+pbrier_nocor_women <- ggplot(as.data.frame(brier_nocor_women),aes(x = brier_nocor_women))+
+  geom_histogram(color = "black", fill = "grey") + # Adjust color and bin width
+  labs(
+    title = "Independent Correlation",
+    x = "Brier Score",
+    y = "Frequency")+
+  theme_minimal()
+
+
+
+```
+
+# Results
+
+```{r fig.width=16cm, fig.height=16}
+p1 <- sim_data_similar_women %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T,-S) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("Women Framingham Simulated Correlation")
+
+p <- framingham_df_women_log %>% 
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T,-S) %>%
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  cor() %>%
+  ggcorrplot()+ggtitle("Women Framingham Correlation") 
+
+
+
+p2 <- sim_data_similar_men %>%
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T,-S) %>%
+  cor() %>%
+  ggcorrplot()+ ggtitle("Men Framingham Simulated Correlation")
+
+pp <- framingham_df_men_log %>% 
+  dplyr::select(-log_SYSBP_UT,-log_SYSBP_T,-S) %>%
+  mutate(CURSMOKE = as.numeric(CURSMOKE)-1, 
+         DIABETES = as.numeric(DIABETES)-1,
+         BPMEDS = as.numeric(BPMEDS)-1) %>%
+  cor() %>%
+  ggcorrplot()+ggtitle("Men Framingham Correlation") 
+
+
+
+ggarrange(p1,p,p2,pp,ncol = 2, nrow = 2, common.legend = T, legend = "bottom")
+
+```
+
+```{r fig.width=9}
+ggarrange(pbrier_nocor_men,pbrier_similar_men,pbrier_med_men,pbrier_high_men,ncol = 2,nrow = 2) %>% annotate_figure(top = text_grob("MEN Distribution of Estimate for Brier Score on Matrix", size = 14, face = "bold"))
+
+res_men <- cbind(c(brier_nocor_men_avg, brier_similar_men_avg, brier_med_men_avg, brier_high_men_avg),c(brier_nocor_men_sd, brier_similar_men_sd, brier_med_men_sd, brier_high_men_sd))
+res_men <- round(res_men,4)
+colnames(res_men) <- c("Brier", "SD Brier")
+rownames(res_men) <- c("Uncorrelated", "Similar", "Medium", "High")
+tab_men <- res_men %>% 
+  kable(booktabs = TRUE, caption = " Brier Results for Men Model") %>%
+  kableExtra::kable_styling(font_size = 8, latex_options = "HOLD_position") %>%     add_footnote(paste("NHANES Brier score is", round(brier_nhanes_men,4)))
+
+ggarrange(pbrier_nocor_women,pbrier_similar_women,pbrier_med_women,pbrier_high_women,ncol = 2,nrow = 2) %>% annotate_figure(top = text_grob("Women Distribution of Estimate for Brier Score on Matrix", size = 14, face = "bold"))
+
+res_women <- cbind(c(brier_nocor_women_avg, brier_similar_women_avg, brier_med_women_avg, brier_high_women_avg),c(brier_nocor_women_sd, brier_similar_women_sd, brier_med_women_sd, brier_high_women_sd))
+res_women <- round(res_women,4)
+colnames(res_women) <- c("Brier", "SD Brier")
+rownames(res_women) <- c("Uncorrelated", "Similar", "Medium", "High")
+tab_women <- res_women %>% 
+  kable(booktabs = TRUE, caption = " Brier Results for Women Model") %>%
+  kableExtra::kable_styling(font_size = 8, latex_options = "HOLD_position") %>%     add_footnote(paste("NHANES Brier score is", round(brier_nhanes_women,4)))
+
+kable(list(tab_men, tab_women))
+c(brier_men_fram,brier_women_fram)
+tab_men
+
+#bias
+c(brier_nocor_women_avg, brier_similar_women_avg, brier_med_women_avg, brier_high_women_avg) - brier_nhanes_women
+
+c(brier_nocor_men_avg, brier_similar_men_avg, brier_med_men_avg, brier_high_men_avg)-brier_nhanes_men
+
+
+```
+
+```{r}
+```
+
+# Conclusion
+
+# 
+
+```         
+```
