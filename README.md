@@ -1,5 +1,5 @@
 # PHP2550-Portfolio
-This portfolio consists as the final project for the course PHP2550: Practical Data Analysis at Brown University. 
+This portfolio consists includes all three projects for the course PHP2550: Practical Data Analysis at Brown University. 
 
 # Data Privacy
 Data used in this project provided by the Institution is confidential and proprietary information. Data Privacy Agreement is entered by the signed student participating in PHP 2550 Practical Data Analysis, represented by Alice Paul.
